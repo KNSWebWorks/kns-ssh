@@ -1,3 +1,5 @@
+//go:build !darwin && !windows
+
 package cmd
 
 import (
@@ -15,29 +17,35 @@ import (
 )
 
 type Agent struct {
-	Token    string
-	Server   string
-	Conn     *websocket.Conn
-	Sessions map[string]*os.File // SessionID -> PTY
-	mu       sync.Mutex
+	Token      string
+	Server     string
+	Conn       *websocket.Conn
+	Sessions   map[string]*os.File
+	mu         sync.Mutex
+	setStatus  func(string)
 }
 
 func AgentCmd() *cobra.Command {
 	var token, server string
 	cmd := &cobra.Command{
 		Use:   "agent",
-		Short: "Start the KNS SSH Agent",
+		Short: "Start the KNS SSH Agent (Headless)",
 		Run: func(cmd *cobra.Command, args []string) {
 			if token == "" || server == "" {
 				log.Fatal("Both --token and --server are required")
 			}
 			
 			agent := &Agent{
-				Token:    token,
-				Server:   server,
-				Sessions: make(map[string]*os.File),
+				Token:     token,
+				Server:    server,
+				Sessions:  make(map[string]*os.File),
 			}
 			
+			agent.setStatus = func(status string) {
+				log.Println("Status:", status)
+			}
+
+			// Headless run on Linux
 			agent.RunLoop()
 		},
 	}
@@ -48,13 +56,15 @@ func AgentCmd() *cobra.Command {
 
 func (a *Agent) connect() error {
 	url := a.Server + "/api/ws/agent?token=" + a.Token
-	log.Printf("Connecting to %s...", url)
+	a.setStatus("Connecting...")
 	c, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		return err
 	}
+	a.mu.Lock()
 	a.Conn = c
-	log.Println("Connected to server.")
+	a.mu.Unlock()
+	a.setStatus("Connected")
 	return nil
 }
 
@@ -62,16 +72,24 @@ func (a *Agent) RunLoop() {
 	for {
 		err := a.connect()
 		if err != nil {
-			log.Printf("Connection failed: %v. Retrying in 5 seconds...", err)
+			a.setStatus("Error (Retrying in 5s)")
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
 		for {
-			_, message, err := a.Conn.ReadMessage()
+			a.mu.Lock()
+			conn := a.Conn
+			a.mu.Unlock()
+
+			if conn == nil {
+				break
+			}
+
+			_, message, err := conn.ReadMessage()
 			if err != nil {
-				log.Println("Disconnected:", err)
-				a.Conn.Close()
+				a.setStatus("Disconnected")
+				conn.Close()
 				break
 			}
 
@@ -110,9 +128,6 @@ func (a *Agent) handleMessage(msg WsMessage) {
 					n, err := p.Read(buf)
 					if err != nil {
 						// PTY closed
-						if err != io.EOF {
-							log.Printf("PTY read error: %v", err)
-						}
 						a.mu.Lock()
 						delete(a.Sessions, sessionID)
 						a.mu.Unlock()
@@ -125,6 +140,7 @@ func (a *Agent) handleMessage(msg WsMessage) {
 						Data:      string(buf[:n]),
 					}
 					b, _ := json.Marshal(outMsg)
+					
 					a.mu.Lock()
 					if a.Conn != nil {
 						a.Conn.WriteMessage(websocket.TextMessage, b)
