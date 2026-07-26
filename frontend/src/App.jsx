@@ -82,7 +82,7 @@ function App() {
   return (
     <>
       <header className="header">
-        <h2>SSH Assistant</h2>
+        <h2>KNS SSH</h2>
         <div style={{color: "var(--text-muted)", fontSize: "14px"}}>Agent Control Center</div>
       </header>
 

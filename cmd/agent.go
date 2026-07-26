@@ -26,7 +26,7 @@ func AgentCmd() *cobra.Command {
 	var token, server string
 	cmd := &cobra.Command{
 		Use:   "agent",
-		Short: "Start the SSH Assistant Agent",
+		Short: "Start the KNS SSH Agent",
 		Run: func(cmd *cobra.Command, args []string) {
 			if token == "" || server == "" {
 				log.Fatal("Both --token and --server are required")

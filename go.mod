@@ -1,4 +1,4 @@
-module github.com/user/ssh-assistant
+module github.com/KNSWebWorks/kns-ssh
 
 go 1.25.0
 

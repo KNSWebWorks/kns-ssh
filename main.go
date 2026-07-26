@@ -5,7 +5,7 @@ import (
 	"log"
 
 	"github.com/spf13/cobra"
-	"github.com/user/ssh-assistant/cmd"
+	"github.com/KNSWebWorks/kns-ssh/cmd"
 )
 
 //go:embed all:frontend/dist
@@ -13,8 +13,8 @@ var distDir embed.FS
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "ssh-assistant",
-		Short: "SSH Assistant Proxy and Agent",
+		Use:   "kns-ssh",
+		Short: "KNS SSH Proxy and Agent",
 	}
 
 	rootCmd.AddCommand(cmd.ServeCmd(distDir))

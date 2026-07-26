@@ -16,13 +16,13 @@ COPY . .
 RUN rm -rf frontend/dist
 COPY --from=frontend-builder /app/dist /app/frontend/dist
 # Build Go binary
-RUN go build -o /ssh-assistant main.go ssh_runner.go
+RUN go build -o /kns-ssh main.go
 
 # Stage 3: Run
 FROM alpine:latest
 WORKDIR /
-COPY --from=backend-builder /ssh-assistant /ssh-assistant
+COPY --from=backend-builder /kns-ssh /kns-ssh
 RUN apk add --no-cache ca-certificates
 EXPOSE 8090
 VOLUME [ "/pb_data" ]
-ENTRYPOINT ["/ssh-assistant", "serve", "--http=0.0.0.0:8090"]
+ENTRYPOINT ["/kns-ssh", "serve", "--http=0.0.0.0:8090"]
