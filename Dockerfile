@@ -24,5 +24,5 @@ WORKDIR /
 COPY --from=backend-builder /kns-ssh /kns-ssh
 RUN apk add --no-cache ca-certificates
 EXPOSE 8090
-VOLUME [ "/pb_data" ]
+
 ENTRYPOINT ["/kns-ssh", "serve", "--http=0.0.0.0:8090"]
