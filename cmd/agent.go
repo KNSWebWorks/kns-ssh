@@ -76,6 +76,7 @@ type Agent struct {
 	sessions map[string]*Session
 
 	useTmux   bool
+	tmuxPath  string
 	setStatus func(string)
 }
 
@@ -85,9 +86,10 @@ func NewAgent(token, server string) *Agent {
 		Server:   server,
 		sessions: make(map[string]*Session),
 	}
-	if path, err := exec.LookPath("tmux"); err == nil {
+	a.tmuxPath = findTmux()
+	if a.tmuxPath != "" {
 		a.useTmux = true
-		log.Printf("tmux found (%s): sessions will survive agent restarts", path)
+		log.Printf("tmux found (%s): sessions will survive agent restarts", a.tmuxPath)
 	} else {
 		log.Printf("tmux not found: sessions die with the agent (install tmux for persistence)")
 	}
@@ -105,6 +107,20 @@ func tmuxSessionName(id string) string {
 		}
 	}
 	return b.String()
+}
+
+// findTmux locates the tmux binary. Service managers (launchd, systemd)
+// start agents with a minimal PATH, so also probe well-known locations.
+func findTmux() string {
+	if path, err := exec.LookPath("tmux"); err == nil {
+		return path
+	}
+	for _, path := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 func (a *Agent) connect() error {
@@ -251,15 +267,15 @@ func (a *Agent) startTmux(s *Session) {
 	cols, rows := s.cols, s.rows
 	s.mu.Unlock()
 
-	exists := exec.Command("tmux", "has-session", "-t", name).Run() == nil
+	exists := exec.Command(a.tmuxPath, "has-session", "-t", name).Run() == nil
 
 	var c *exec.Cmd
 	if exists {
 		log.Printf("Attaching to existing tmux session %s", name)
-		c = exec.Command("tmux", "attach-session", "-t", name)
+		c = exec.Command(a.tmuxPath, "attach-session", "-t", name)
 	} else {
 		log.Printf("Creating tmux session %s", name)
-		c = exec.Command("tmux", "new-session", "-s", name, "-x", itoa(cols), "-y", itoa(rows), "bash")
+		c = exec.Command(a.tmuxPath, "new-session", "-s", name, "-x", itoa(cols), "-y", itoa(rows), "bash")
 	}
 	c.Env = termEnv()
 
@@ -281,7 +297,7 @@ func (a *Agent) startTmux(s *Session) {
 
 	if exists {
 		// Restore the view from tmux's own history (works after agent restarts).
-		out, err := exec.Command("tmux", "capture-pane", "-p", "-J", "-e", "-t", name, "-S", "-2000").Output()
+		out, err := exec.Command(a.tmuxPath, "capture-pane", "-p", "-J", "-e", "-t", name, "-S", "-2000").Output()
 		if err == nil && len(out) > 0 {
 			a.send(WsMessage{Type: "replay", SessionID: s.id, Data: string(out)})
 		}
@@ -388,7 +404,7 @@ func (a *Agent) pumpOutput(s *Session) {
 			// In tmux mode the attach process may have died while the tmux
 			// session itself is still alive (e.g. after client_detached).
 			if a.useTmux && s.tmuxName != "" &&
-				exec.Command("tmux", "has-session", "-t", s.tmuxName).Run() == nil {
+				exec.Command(a.tmuxPath, "has-session", "-t", s.tmuxName).Run() == nil {
 				return // detached, session persists in the tmux server
 			}
 
@@ -415,7 +431,7 @@ func (a *Agent) killSession(id string, notify bool) {
 		return
 	}
 	if s.tmuxName != "" {
-		exec.Command("tmux", "kill-session", "-t", s.tmuxName).Run()
+		exec.Command(a.tmuxPath, "kill-session", "-t", s.tmuxName).Run()
 	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		s.cmd.Process.Kill()
