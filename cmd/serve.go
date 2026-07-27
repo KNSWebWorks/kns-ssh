@@ -89,6 +89,7 @@ func ServeCmd(distDir embed.FS) *cobra.Command {
 						dbx.Params{"token": token},
 					)
 					if err != nil {
+						log.Printf("agent token lookup failed (len=%d): %v", len(token), err)
 						return req.UnauthorizedError("Unknown agent token", nil)
 					}
 
@@ -226,6 +227,6 @@ func bootstrapFromEnv(app core.App) error {
 	if _, err := createAgent(app, user.Id, agentName, agentToken); err != nil {
 		return err
 	}
-	log.Printf("Created initial agent %q from env", agentName)
+	log.Printf("Created initial agent %q from env (token len=%d)", agentName, len(agentToken))
 	return nil
 }
