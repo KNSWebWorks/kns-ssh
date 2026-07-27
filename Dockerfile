@@ -26,4 +26,4 @@ RUN apk add --no-cache ca-certificates
 EXPOSE 8090
 
 # Railway передаёт порт через $PORT; локально по умолчанию 8090
-ENTRYPOINT ["/bin/sh", "-c", "exec /kns-ssh serve --http=0.0.0.0:${PORT:-8090} --dir=/data/pb_data"]
+ENTRYPOINT ["/bin/sh", "-c", "exec /kns-ssh serve --http=0.0.0.0:${PORT:-8090} --dir=/pb_data"]

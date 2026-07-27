@@ -57,7 +57,7 @@ KNS_AGENT_TOKEN=<длинная-случайная-строка>
 
 ## Деплой на Railway
 
-Репозиторий собирается через `Dockerfile` (multi-stage: frontend → Go binary). Порт берётся из `$PORT` (Railway передаёт сам). Данные PocketBase пишутся в `/data/pb_data` — для персистентности подключи Railway Volume в `/data`, иначе пользователи пропадут при пересоздании контейнера.
+Репозиторий собирается через `Dockerfile` (multi-stage: frontend → Go binary). Порт берётся из `$PORT` (Railway передаёт сам). Данные PocketBase пишутся в `/pb_data` — там смонтирован Railway Volume, пользователи и агенты переживают передеплои.
 
 ## Протестировано
 
