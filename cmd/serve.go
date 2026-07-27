@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/pocketbase/dbx"
@@ -115,7 +116,10 @@ func ServeCmd(distDir embed.FS) *cobra.Command {
 					return nil
 				})
 
-				// Endpoint for Web Client to connect
+				// Endpoint for Web Client to connect.
+				// After the upgrade the first message must be
+				// {"type":"auth","data":"<PocketBase auth token>"} — the console
+				// opens only if the token is valid AND the agent belongs to that user.
 				e.Router.GET("/api/ws/client", func(req *core.RequestEvent) error {
 					sessionID := req.Request.URL.Query().Get("session_id")
 					agentID := req.Request.URL.Query().Get("agent_id")
@@ -131,6 +135,42 @@ func ServeCmd(distDir embed.FS) *cobra.Command {
 						log.Println("WS upgrade failed:", err)
 						return nil
 					}
+
+					reject := func(reason string) {
+						b, _ := json.Marshal(WsMessage{Type: "auth_error", SessionID: sessionID, Data: reason})
+						conn.WriteMessage(websocket.TextMessage, b)
+						conn.Close()
+					}
+
+					// Announce the challenge, then wait for the auth message (10s max).
+					challenge, _ := json.Marshal(WsMessage{Type: "auth_required", SessionID: sessionID})
+					conn.WriteMessage(websocket.TextMessage, challenge)
+					conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+					_, raw, err := conn.ReadMessage()
+					if err != nil {
+						conn.Close()
+						return nil
+					}
+					var authMsg WsMessage
+					if json.Unmarshal(raw, &authMsg) != nil || authMsg.Type != "auth" {
+						reject("authentication required")
+						return nil
+					}
+					authRecord, err := req.App.FindAuthRecordByToken(authMsg.Data)
+					if err != nil {
+						reject("invalid auth token")
+						return nil
+					}
+					agentRec, err := req.App.FindFirstRecordByFilter(
+						"agents",
+						"token = {:token}",
+						dbx.Params{"token": agentID},
+					)
+					if err != nil || agentRec.GetString("user") != authRecord.Id {
+						reject("this agent does not belong to you")
+						return nil
+					}
+					conn.SetReadDeadline(time.Time{})
 
 					hub.RegisterClient(sessionID, agentID, conn)
 					defer hub.UnregisterClient(sessionID)

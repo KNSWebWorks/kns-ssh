@@ -63,7 +63,7 @@ function App() {
         {!auth ? (
           <LoginView onLogin={setAuth} />
         ) : selectedAgent ? (
-          <AgentConsolesView agent={selectedAgent} onBack={() => setSelectedAgent(null)} />
+          <AgentConsolesView agent={selectedAgent} auth={auth} onBack={() => setSelectedAgent(null)} />
         ) : (
           <AgentListView auth={auth} onSelect={setSelectedAgent} onAuthExpired={handleLogout} />
         )}
@@ -176,7 +176,7 @@ function AgentListView({ auth, onSelect, onAuthExpired }) {
 // AgentConsolesView manages multiple terminal tabs for one agent.
 // Tabs survive page reloads: session ids are stored in localStorage and
 // reattached (the agent replays the scrollback).
-function AgentConsolesView({ agent, onBack }) {
+function AgentConsolesView({ agent, auth, onBack }) {
   const [tabs, setTabs] = useState(() => loadSessions(agent.token))
   const [activeId, setActiveId] = useState(() => loadSessions(agent.token)[0]?.id || null)
   const tabApis = useRef({}) // sessionId -> { restart, kill }
@@ -248,6 +248,7 @@ function AgentConsolesView({ agent, onBack }) {
         <div key={t.id} style={{ display: t.id === activeId ? 'flex' : 'none', flex: 1, flexDirection: 'column' }}>
           <TerminalTab
             agent={agent}
+            auth={auth}
             sessionId={t.id}
             isActive={t.id === activeId}
             registerApi={registerApi}
@@ -259,7 +260,7 @@ function AgentConsolesView({ agent, onBack }) {
   )
 }
 
-function TerminalTab({ agent, sessionId, isActive, registerApi, unregisterApi }) {
+function TerminalTab({ agent, auth, sessionId, isActive, registerApi, unregisterApi }) {
   const [connected, setConnected] = useState(false)
   const terminalRef = useRef(null)
   const termRef = useRef(null)
@@ -346,6 +347,9 @@ function TerminalTab({ agent, sessionId, isActive, registerApi, unregisterApi })
       wsRef.current = ws
 
       ws.onopen = () => {
+        // First message must be auth — the server validates ownership before
+        // starting/reattaching the shell.
+        ws.send(JSON.stringify({ type: 'auth', data: auth.token }))
         setConnected(true)
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
       }
@@ -366,6 +370,11 @@ function TerminalTab({ agent, sessionId, isActive, registerApi, unregisterApi })
               break
             case 'session_closed':
               term.write('\r\n\x1b[31m[Shell exited — press ⟳ Restart to start a new one]\x1b[0m\r\n')
+              break
+            case 'auth_error':
+              // Do not reconnect on auth failures — the session/token is stale.
+              closedByUser.current = true
+              term.write(`\r\n\x1b[31m[Access denied: ${msg.data}. Try reloading the page or logging in again.]\x1b[0m\r\n`)
               break
           }
         } catch (e) {
