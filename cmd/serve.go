@@ -187,17 +187,45 @@ func bootstrapFromEnv(app core.App) error {
 		return err
 	}
 	if user == nil {
-		return nil // user already existed
+		// User already exists — env stays the source of truth for the password.
+		user, err = findUserByEmail(app, email)
+		if err != nil {
+			return err
+		}
+		user.SetPassword(password)
+		if err := app.Save(user); err != nil {
+			return err
+		}
+	} else {
+		log.Printf("Created initial user %q from env", email)
 	}
-	log.Printf("Created initial user %q from env", email)
 
 	agentName := os.Getenv("KNS_AGENT_NAME")
 	agentToken := os.Getenv("KNS_AGENT_TOKEN")
-	if agentName != "" && agentToken != "" {
-		if _, err := createAgent(app, user.Id, agentName, agentToken); err != nil {
-			return err
-		}
-		log.Printf("Created initial agent %q from env", agentName)
+	if agentName == "" || agentToken == "" {
+		return nil
 	}
+
+	existing, err := app.FindFirstRecordByFilter(
+		"agents",
+		"name = {:name} && user = {:userID}",
+		dbx.Params{"name": agentName, "userID": user.Id},
+	)
+	if err == nil {
+		// Agent exists — env is the source of truth for the token.
+		if existing.GetString("token") != agentToken {
+			existing.Set("token", agentToken)
+			if err := app.Save(existing); err != nil {
+				return err
+			}
+			log.Printf("Updated token of agent %q from env", agentName)
+		}
+		return nil
+	}
+
+	if _, err := createAgent(app, user.Id, agentName, agentToken); err != nil {
+		return err
+	}
+	log.Printf("Created initial agent %q from env", agentName)
 	return nil
 }
