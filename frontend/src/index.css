@@ -180,6 +180,48 @@ input:focus {
   margin-top: 8px;
 }
 
+.tab-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  user-select: none;
+}
+
+.tab:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.tab.active {
+  border-color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.tab-close {
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+
+.tab-close:hover {
+  color: var(--error);
+}
+
 @media (max-width: 640px) {
   .header { padding: 14px 16px; }
   .main-content { padding: 16px; }
