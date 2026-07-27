@@ -44,6 +44,16 @@ KNS_AGENT_TOKEN=<длинная-случайная-строка>
 ./kns-ssh agent -t <AGENT_TOKEN> -s wss://ssh.knswebworks.com
 ```
 
+#### Автозапуск на macOS (launchd)
+
+```bash
+# подставь свой токен в launchd/com.knswebworks.kns-ssh-agent.plist (PASTE_AGENT_TOKEN_HERE)
+cp launchd/com.knswebworks.kns-ssh-agent.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.knswebworks.kns-ssh-agent.plist
+```
+
+Агент стартует при входе в систему и перезапускается при падении. Логи: `~/Library/Logs/kns-ssh-agent.err.log`. Остановить: `launchctl bootout gui/$(id -u)/com.knswebworks.kns-ssh-agent`.
+
 ### 4. Браузер / телефон
 
 Открой `https://ssh.knswebworks.com` → войди по email/паролю → увидишь список своих компьютеров с индикатором online → клик → терминал.

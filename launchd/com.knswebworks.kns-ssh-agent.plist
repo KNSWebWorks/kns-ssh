@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.knswebworks.kns-ssh-agent</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/kasparsiricenko/Repositories/kns-ssh/kns-ssh</string>
+		<string>agent</string>
+		<string>-t</string>
+		<string>PASTE_AGENT_TOKEN_HERE</string>
+		<string>-s</string>
+		<string>wss://kns-ssh-production.up.railway.app</string>
+	</array>
+
+	<!-- Start at login, restart if the process dies -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<!-- Do not hammer the server if the binary keeps crashing instantly -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>StandardOutPath</key>
+	<string>/Users/kasparsiricenko/Library/Logs/kns-ssh-agent.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/kasparsiricenko/Library/Logs/kns-ssh-agent.err.log</string>
+</dict>
+</plist>
