@@ -4,7 +4,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"io"
 	"log"
 	"os"
 	"os/exec"
