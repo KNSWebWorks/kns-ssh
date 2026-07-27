@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -17,14 +19,17 @@ const (
 	scrollbackLimit = 256 * 1024 // bytes of scrollback kept per session
 	defaultCols     = 80
 	defaultRows     = 24
+	tmuxPrefix      = "kns_"
 )
 
-// Session is a live PTY on the agent. It survives web-client disconnects:
-// output keeps accumulating in the scrollback buffer and is replayed on reattach.
+// Session is a live shell on the agent. In tmux mode it is backed by a tmux
+// session (survives agent restarts); otherwise by a plain PTY running bash.
+// Either way it survives web-client disconnects.
 type Session struct {
-	id   string
-	cmd  *exec.Cmd
-	ptmx *os.File
+	id       string
+	tmuxName string // non-empty in tmux mode
+	cmd      *exec.Cmd
+	ptmx     *os.File
 
 	mu         sync.Mutex
 	scrollback []byte
@@ -58,12 +63,6 @@ func (s *Session) setSize(cols, rows int) {
 	}
 }
 
-func (s *Session) size() (int, int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cols, s.rows
-}
-
 type Agent struct {
 	Token  string
 	Server string
@@ -76,15 +75,36 @@ type Agent struct {
 	sessMu   sync.Mutex
 	sessions map[string]*Session
 
+	useTmux   bool
 	setStatus func(string)
 }
 
 func NewAgent(token, server string) *Agent {
-	return &Agent{
+	a := &Agent{
 		Token:    token,
 		Server:   server,
 		sessions: make(map[string]*Session),
 	}
+	if path, err := exec.LookPath("tmux"); err == nil {
+		a.useTmux = true
+		log.Printf("tmux found (%s): sessions will survive agent restarts", path)
+	} else {
+		log.Printf("tmux not found: sessions die with the agent (install tmux for persistence)")
+	}
+	return a
+}
+
+func tmuxSessionName(id string) string {
+	var b strings.Builder
+	b.WriteString(tmuxPrefix)
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
 }
 
 func (a *Agent) connect() error {
@@ -99,12 +119,6 @@ func (a *Agent) connect() error {
 	a.connMu.Unlock()
 	a.setStatus("Connected")
 	return nil
-}
-
-func (a *Agent) setConn(c *websocket.Conn) {
-	a.connMu.Lock()
-	a.conn = c
-	a.connMu.Unlock()
 }
 
 func (a *Agent) send(msg WsMessage) {
@@ -181,6 +195,12 @@ func (a *Agent) handleMessage(msg WsMessage) {
 			a.sessions[msg.SessionID] = s
 			a.sessMu.Unlock()
 		}
+	case "client_detached":
+		// The web client went away: detach from tmux (the session itself
+		// keeps running) or keep the legacy PTY alive.
+		if a.useTmux {
+			a.detach(msg.SessionID)
+		}
 	case "restart_session":
 		a.killSession(msg.SessionID, false)
 		a.startOrAttach(msg.SessionID)
@@ -195,8 +215,8 @@ func (a *Agent) getSession(id string) *Session {
 	return a.sessions[id]
 }
 
-// startOrAttach starts a fresh PTY or, if the session already exists,
-// replays the scrollback so the client restores its view.
+// startOrAttach starts a fresh shell or reattaches an existing session,
+// replaying the scrollback so the client restores its view.
 func (a *Agent) startOrAttach(id string) {
 	a.sessMu.Lock()
 	s, exists := a.sessions[id]
@@ -204,25 +224,83 @@ func (a *Agent) startOrAttach(id string) {
 		s = &Session{id: id, cols: defaultCols, rows: defaultRows}
 		a.sessions[id] = s
 	}
-	running := exists && s.ptmx != nil
+	attached := exists && s.ptmx != nil
 	a.sessMu.Unlock()
 
-	if running {
+	if attached {
 		log.Printf("Reattaching session %s (replay %d bytes)", id, len(s.scrollback))
 		a.send(WsMessage{Type: "replay", SessionID: id, Data: string(s.snapshot())})
 		return
 	}
 
-	log.Printf("Starting new PTY for session %s", id)
+	if a.useTmux {
+		a.startTmux(s)
+		return
+	}
+	a.startPlain(s)
+}
+
+// startTmux attaches the session to a tmux session, creating it if needed.
+// tmux sessions live in the tmux server and survive agent restarts.
+func (a *Agent) startTmux(s *Session) {
+	s.mu.Lock()
+	if s.tmuxName == "" {
+		s.tmuxName = tmuxSessionName(s.id)
+	}
+	name := s.tmuxName
+	cols, rows := s.cols, s.rows
+	s.mu.Unlock()
+
+	exists := exec.Command("tmux", "has-session", "-t", name).Run() == nil
+
+	var c *exec.Cmd
+	if exists {
+		log.Printf("Attaching to existing tmux session %s", name)
+		c = exec.Command("tmux", "attach-session", "-t", name)
+	} else {
+		log.Printf("Creating tmux session %s", name)
+		c = exec.Command("tmux", "new-session", "-s", name, "-x", itoa(cols), "-y", itoa(rows), "bash")
+	}
+	c.Env = termEnv()
+
+	ptmx, err := pty.Start(c)
+	if err != nil {
+		log.Printf("Failed to start tmux: %v", err)
+		a.send(WsMessage{Type: "session_closed", SessionID: s.id, Data: "failed to start shell"})
+		return
+	}
+
+	s.mu.Lock()
+	s.cmd = c
+	s.ptmx = ptmx
+	if !exists {
+		s.scrollback = nil
+	}
+	s.mu.Unlock()
+	pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+
+	if exists {
+		// Restore the view from tmux's own history (works after agent restarts).
+		out, err := exec.Command("tmux", "capture-pane", "-p", "-J", "-e", "-t", name, "-S", "-2000").Output()
+		if err == nil && len(out) > 0 {
+			a.send(WsMessage{Type: "replay", SessionID: s.id, Data: string(out)})
+		}
+	} else {
+		a.send(WsMessage{Type: "session_started", SessionID: s.id})
+	}
+
+	go a.pumpOutput(s)
+}
+
+// startPlain runs a bare bash PTY (fallback when tmux is unavailable).
+func (a *Agent) startPlain(s *Session) {
+	log.Printf("Starting new PTY for session %s", s.id)
 	c := exec.Command("bash")
-	c.Env = append(os.Environ(),
-		"TERM=xterm-256color",
-		"COLORTERM=truecolor",
-	)
+	c.Env = termEnv()
 	ptmx, err := pty.Start(c)
 	if err != nil {
 		log.Printf("Failed to start pty: %v", err)
-		a.send(WsMessage{Type: "session_closed", SessionID: id, Data: "failed to start shell"})
+		a.send(WsMessage{Type: "session_closed", SessionID: s.id, Data: "failed to start shell"})
 		return
 	}
 
@@ -234,9 +312,41 @@ func (a *Agent) startOrAttach(id string) {
 	s.mu.Unlock()
 	pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 
-	a.send(WsMessage{Type: "session_started", SessionID: id})
+	a.send(WsMessage{Type: "session_started", SessionID: s.id})
 
 	go a.pumpOutput(s)
+}
+
+func termEnv() []string {
+	env := append(os.Environ(),
+		"TERM=xterm-256color",
+		"COLORTERM=truecolor",
+	)
+	// tmux needs a UTF-8 locale; launchd starts agents with a minimal env.
+	if os.Getenv("LANG") == "" {
+		env = append(env, "LANG=en_US.UTF-8")
+	}
+	return env
+}
+
+func itoa(n int) string {
+	if n <= 0 {
+		n = defaultCols
+	}
+	return strconv.Itoa(n)
+}
+
+// detach closes the tmux attach process; the tmux session keeps running.
+func (a *Agent) detach(id string) {
+	s := a.getSession(id)
+	if s == nil || s.ptmx == nil {
+		return
+	}
+	log.Printf("Detaching session %s (tmux keeps running)", id)
+	if s.cmd != nil && s.cmd.Process != nil {
+		s.cmd.Process.Kill()
+	}
+	s.ptmx.Close()
 }
 
 // pumpOutput forwards PTY output to the server and keeps the scrollback.
@@ -268,10 +378,23 @@ func (a *Agent) pumpOutput(s *Session) {
 			}
 		}
 		if err != nil {
-			// PTY closed (shell exited).
 			a.sessMu.Lock()
 			if cur, ok := a.sessions[s.id]; ok && cur == s {
 				s.ptmx = nil
+				s.cmd = nil
+			}
+			a.sessMu.Unlock()
+
+			// In tmux mode the attach process may have died while the tmux
+			// session itself is still alive (e.g. after client_detached).
+			if a.useTmux && s.tmuxName != "" &&
+				exec.Command("tmux", "has-session", "-t", s.tmuxName).Run() == nil {
+				return // detached, session persists in the tmux server
+			}
+
+			a.sessMu.Lock()
+			if cur, ok := a.sessions[s.id]; ok && cur == s {
+				delete(a.sessions, s.id)
 			}
 			a.sessMu.Unlock()
 			a.send(WsMessage{Type: "session_closed", SessionID: s.id})
@@ -291,6 +414,9 @@ func (a *Agent) killSession(id string, notify bool) {
 	if !ok {
 		return
 	}
+	if s.tmuxName != "" {
+		exec.Command("tmux", "kill-session", "-t", s.tmuxName).Run()
+	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		s.cmd.Process.Kill()
 	}
@@ -303,7 +429,8 @@ func (a *Agent) killSession(id string, notify bool) {
 	}
 }
 
-// closeAllSessions is used on shutdown.
+// closeAllSessions is used on shutdown. In tmux mode it only detaches:
+// the tmux sessions (and their shells) survive the agent restart.
 func (a *Agent) closeAllSessions() {
 	a.sessMu.Lock()
 	ids := make([]string, 0, len(a.sessions))
@@ -312,6 +439,10 @@ func (a *Agent) closeAllSessions() {
 	}
 	a.sessMu.Unlock()
 	for _, id := range ids {
-		a.killSession(id, false)
+		if a.useTmux {
+			a.detach(id)
+		} else {
+			a.killSession(id, false)
+		}
 	}
 }

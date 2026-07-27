@@ -96,11 +96,19 @@ func (h *Hub) RegisterClient(sessionID, agentID string, conn *websocket.Conn) {
 
 func (h *Hub) UnregisterClient(sessionID string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if conn, ok := h.Clients[sessionID]; ok {
+	conn, ok := h.Clients[sessionID]
+	agentID := h.SessionAgent[sessionID]
+	if ok {
 		conn.Close()
 		delete(h.Clients, sessionID)
 		delete(h.SessionAgent, sessionID)
+	}
+	entry, agentOnline := h.Agents[agentID]
+	h.mu.Unlock()
+
+	// Tell the agent the web client went away (it may want to detach from tmux).
+	if ok && agentOnline {
+		entry.conn.WriteJSON(WsMessage{Type: "client_detached", SessionID: sessionID})
 	}
 	log.Printf("Client unregistered: %s", sessionID)
 }
