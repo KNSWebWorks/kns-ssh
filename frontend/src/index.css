@@ -222,6 +222,41 @@ input:focus {
   color: var(--error);
 }
 
+.keybar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.key {
+  min-width: 44px;
+  height: 40px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-main);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  transition: background 0.1s ease-in-out;
+}
+
+.key:active {
+  background: rgba(59, 130, 246, 0.35);
+}
+
+.key.armed {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+}
+
 @media (max-width: 640px) {
   .header { padding: 14px 16px; }
   .main-content { padding: 16px; }

@@ -26,6 +26,17 @@ function newSessionId() {
   return `t-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`
 }
 
+// ctrlCodeFor maps a typed character to its Ctrl+<char> control code,
+// following terminal conventions (@=0x00, A-Z=0x01-0x1A, [=0x1B ... _=0x1F, ?=0x7F).
+function ctrlCodeFor(data) {
+  if (!data || data.length !== 1) return null
+  const ch = data.toUpperCase()
+  const c = ch.charCodeAt(0)
+  if (c >= 64 && c <= 95) return String.fromCharCode(c - 64)
+  if (ch === '?') return '\x7f'
+  return null
+}
+
 function App() {
   const [auth, setAuth] = useState(loadAuth)
   const [selectedAgent, setSelectedAgent] = useState(null)
@@ -256,6 +267,12 @@ function TerminalTab({ agent, sessionId, isActive, registerApi, unregisterApi })
   const fitRef = useRef(null)
   const closedByUser = useRef(false)
   const reconnectTimer = useRef(null)
+  const [ctrlArmed, setCtrlArmed] = useState(false)
+  const ctrlArmedRef = useRef(false)
+  const sendRef = useRef(null)
+
+  // sendKey is used by the keybar (render scope); the actual sender lives in the effect.
+  const sendKey = (seq) => sendRef.current?.({ type: 'terminal_data', data: seq })
 
   useEffect(() => {
     const term = new Terminal({
@@ -276,6 +293,7 @@ function TerminalTab({ agent, sessionId, isActive, registerApi, unregisterApi })
         ws.send(JSON.stringify(obj))
       }
     }
+    sendRef.current = send
 
     // Ctrl/Cmd key handling: browsers steal Ctrl+C/V/Z etc.
     // With a selection Ctrl+C copies; otherwise it sends SIGINT like a real terminal.
@@ -302,7 +320,19 @@ function TerminalTab({ agent, sessionId, isActive, registerApi, unregisterApi })
       return true
     })
 
-    term.onData(data => send({ type: 'terminal_data', data }))
+    // Sticky Ctrl (toolbar): the next typed character becomes Ctrl+<char>.
+    term.onData(data => {
+      if (ctrlArmedRef.current) {
+        ctrlArmedRef.current = false
+        setCtrlArmed(false)
+        const code = ctrlCodeFor(data)
+        if (code) {
+          send({ type: 'terminal_data', data: code })
+          return
+        }
+      }
+      send({ type: 'terminal_data', data })
+    })
 
     const handleResize = () => {
       fitAddon.fit()
@@ -397,10 +427,54 @@ function TerminalTab({ agent, sessionId, isActive, registerApi, unregisterApi })
           {connected ? 'Connected' : 'Reconnecting...'}
         </span>
       </div>
+
+      <Keybar
+        ctrlArmed={ctrlArmed}
+        onCtrlToggle={() => {
+          const next = !ctrlArmedRef.current
+          ctrlArmedRef.current = next
+          setCtrlArmed(next)
+          termRef.current?.focus()
+        }}
+        onKey={(seq) => {
+          ctrlArmedRef.current = false
+          setCtrlArmed(false)
+          sendKey(seq)
+        }}
+        onArrow={(dir) => {
+          // dir: A=up B=down C=right D=left; Ctrl+arrow = word/screen jump (CSI 1;5X)
+          const armed = ctrlArmedRef.current
+          ctrlArmedRef.current = false
+          setCtrlArmed(false)
+          sendKey(armed ? `\x1b[1;5${dir}` : `\x1b[${dir}`)
+        }}
+      />
+
       <div className="glass-panel" style={{ flex: 1, padding: '10px', minHeight: '420px', display: 'flex' }}>
         <div ref={terminalRef} style={{ width: '100%', height: '100%' }}></div>
       </div>
     </>
+  )
+}
+
+// Keybar is a row of special keys for touch devices (and a shortcut row on desktop).
+// Buttons use onPointerDown+preventDefault so tapping them does not blur the
+// terminal or hide the on-screen keyboard.
+function Keybar({ ctrlArmed, onCtrlToggle, onKey, onArrow }) {
+  const noBlur = (e) => e.preventDefault()
+  return (
+    <div className="keybar">
+      <button className="key" onPointerDown={noBlur} onClick={() => onKey('\x1b')}>Esc</button>
+      <button className="key" onPointerDown={noBlur} onClick={() => onKey('\x09')}>Tab</button>
+      <button className={`key ${ctrlArmed ? 'armed' : ''}`} onPointerDown={noBlur} onClick={onCtrlToggle}>Ctrl</button>
+      <button className="key" onPointerDown={noBlur} onClick={() => onKey('\x03')}>^C</button>
+      <button className="key" onPointerDown={noBlur} onClick={() => onKey('\x04')}>^D</button>
+      <span style={{ flex: 1 }}></span>
+      <button className="key" onPointerDown={noBlur} onClick={() => onArrow('D')}>←</button>
+      <button className="key" onPointerDown={noBlur} onClick={() => onArrow('A')}>↑</button>
+      <button className="key" onPointerDown={noBlur} onClick={() => onArrow('B')}>↓</button>
+      <button className="key" onPointerDown={noBlur} onClick={() => onArrow('C')}>→</button>
+    </div>
   )
 }
 
