@@ -19,40 +19,77 @@ type WsMessage struct {
 
 type Hub struct {
 	mu           sync.RWMutex
-	Agents       map[string]*websocket.Conn // AgentID -> WS
-	Clients      map[string]*websocket.Conn // SessionID -> Web Client WS
-	SessionAgent map[string]string          // SessionID -> AgentID
+	Agents       map[string]*AgentEntry // AgentID (token) -> agent connection + metadata
+	Clients      map[string]*safeConn   // SessionID -> Web Client WS
+	SessionAgent map[string]string      // SessionID -> AgentID
+}
+
+// AgentEntry is a connected agent with its owner metadata.
+type AgentEntry struct {
+	conn   *safeConn
+	Name   string
+	UserID string
+}
+
+// safeConn serializes writes: gorilla/websocket panics on concurrent writes.
+type safeConn struct {
+	conn *websocket.Conn
+	wmu  sync.Mutex
+}
+
+func (s *safeConn) WriteJSON(v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return s.conn.WriteMessage(websocket.TextMessage, b)
+}
+
+func (s *safeConn) Close() {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	s.conn.Close()
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		Agents:       make(map[string]*websocket.Conn),
-		Clients:      make(map[string]*websocket.Conn),
+		Agents:       make(map[string]*AgentEntry),
+		Clients:      make(map[string]*safeConn),
 		SessionAgent: make(map[string]string),
 	}
 }
 
-func (h *Hub) RegisterAgent(agentID string, conn *websocket.Conn) {
+func (h *Hub) RegisterAgent(agentID, name, userID string, conn *websocket.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.Agents[agentID] = conn
-	log.Printf("Agent registered: %s", agentID)
+	h.Agents[agentID] = &AgentEntry{conn: &safeConn{conn: conn}, Name: name, UserID: userID}
+	log.Printf("Agent registered: %s (name=%q user=%s)", agentID, name, userID)
 }
 
 func (h *Hub) UnregisterAgent(agentID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if conn, ok := h.Agents[agentID]; ok {
-		conn.Close()
+	if entry, ok := h.Agents[agentID]; ok {
+		entry.conn.Close()
 		delete(h.Agents, agentID)
 	}
 	log.Printf("Agent unregistered: %s", agentID)
 }
 
+// IsOnline reports whether an agent with the given token is connected.
+func (h *Hub) IsOnline(agentID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	_, ok := h.Agents[agentID]
+	return ok
+}
+
 func (h *Hub) RegisterClient(sessionID, agentID string, conn *websocket.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.Clients[sessionID] = conn
+	h.Clients[sessionID] = &safeConn{conn: conn}
 	h.SessionAgent[sessionID] = agentID
 	log.Printf("Client registered for session: %s on agent: %s", sessionID, agentID)
 }
@@ -75,12 +112,11 @@ func (h *Hub) RouteToAgent(sessionID string, msg WsMessage) {
 		h.mu.RUnlock()
 		return
 	}
-	agentConn, ok := h.Agents[agentID]
+	entry, ok := h.Agents[agentID]
 	h.mu.RUnlock()
 
 	if ok {
-		b, _ := json.Marshal(msg)
-		agentConn.WriteMessage(websocket.TextMessage, b)
+		entry.conn.WriteJSON(msg)
 	}
 }
 
@@ -90,7 +126,6 @@ func (h *Hub) RouteToClient(sessionID string, msg WsMessage) {
 	h.mu.RUnlock()
 
 	if ok {
-		b, _ := json.Marshal(msg)
-		clientConn.WriteMessage(websocket.TextMessage, b)
+		clientConn.WriteJSON(msg)
 	}
 }

@@ -17,12 +17,12 @@ import (
 )
 
 type Agent struct {
-	Token      string
-	Server     string
-	Conn       *websocket.Conn
-	Sessions   map[string]*os.File
-	mu         sync.Mutex
-	setStatus  func(string)
+	Token     string
+	Server    string
+	Conn      *websocket.Conn
+	Sessions  map[string]*os.File
+	mu        sync.Mutex
+	setStatus func(string)
 }
 
 func AgentCmd() *cobra.Command {
@@ -34,13 +34,13 @@ func AgentCmd() *cobra.Command {
 			if token == "" || server == "" {
 				log.Fatal("Both --token and --server are required")
 			}
-			
+
 			agent := &Agent{
-				Token:     token,
-				Server:    server,
-				Sessions:  make(map[string]*os.File),
+				Token:    token,
+				Server:   server,
+				Sessions: make(map[string]*os.File),
 			}
-			
+
 			agent.setStatus = func(status string) {
 				log.Println("Status:", status)
 			}
@@ -111,7 +111,7 @@ func (a *Agent) handleMessage(msg WsMessage) {
 	case "start_session":
 		if _, exists := a.Sessions[msg.SessionID]; !exists {
 			log.Printf("Starting new PTY for session %s", msg.SessionID)
-			
+
 			// Start bash
 			c := exec.Command("bash")
 			ptmx, err := pty.Start(c)
@@ -133,14 +133,14 @@ func (a *Agent) handleMessage(msg WsMessage) {
 						a.mu.Unlock()
 						return
 					}
-					
+
 					outMsg := WsMessage{
 						Type:      "terminal_data",
 						SessionID: sessionID,
 						Data:      string(buf[:n]),
 					}
 					b, _ := json.Marshal(outMsg)
-					
+
 					a.mu.Lock()
 					if a.Conn != nil {
 						a.Conn.WriteMessage(websocket.TextMessage, b)

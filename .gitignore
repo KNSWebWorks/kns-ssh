@@ -1,0 +1,10 @@
+# Local binaries
+kns-ssh
+kns-ssh-race
+ssh-assistant
+
+# PocketBase data
+pb_data/
+
+# OS junk
+.DS_Store
